@@ -27,7 +27,7 @@ std::vector<std::string> split(const std::string &str, char delim) {
 
 int main(int argc, char* argv[]) {
     std::string clientId = "clientId";
-    mqtt::async_client client(BROKER_ADDRESS, clientId);
+    mqtt::async_client client(BROKER_ADDRESS, clientId);//criando um cliente assincrono
 
     // Create an MQTT callback.
     class callback : public virtual mqtt::callback {
@@ -57,7 +57,7 @@ int main(int argc, char* argv[]) {
 
     try {
         client.connect(connOpts);
-        client.subscribe("/sensors/#", QOS);
+        client.subscribe("/sensors/#", QOS);//fazendo um subcribe 
     } catch (mqtt::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
         return EXIT_FAILURE;
