@@ -17,6 +17,7 @@
 
 bool envioAtivo = true;
 int qtdeSensores = 6;
+Sensor *sensors[6];
 
 mutex mtx;
 
@@ -37,6 +38,8 @@ string currenteTimeISO(){
 
 void envioLeiturasBroker(Sensor *sensor, string machineId, mqtt::client *client){
     while(envioAtivo){
+        cout<<"[envioLeiturasBroker] sensor_id: "<<sensor->getIdSensor()<<endl;
+
         // Get the current time in ISO 8601 format.
         string timestamp = currenteTimeISO();
 
@@ -56,20 +59,21 @@ void envioLeiturasBroker(Sensor *sensor, string machineId, mqtt::client *client)
                 sensor->setStatus(false);
                 return;
             }
+        
+
+            // Publish the JSON message to the appropriate topic.
+            std::string topic = "/sensors/" + machineId + "/" + sensor->getIdSensor();
+            mqtt::message msg(topic, j.dump(), QOS, false);
+            std::clog << "message published - topic: " << topic << " - message: " << j.dump() << std::endl;
+            client->publish(msg);
+
         mtx.unlock();
-
-        // Publish the JSON message to the appropriate topic.
-        std::string topic = "/sensors/" + machineId + "/" + sensor->getIdSensor();
-        mqtt::message msg(topic, j.dump(), QOS, false);
-        std::clog << "message published - topic: " << topic << " - message: " << j.dump() << std::endl;
-        client->publish(msg);
-
         // Sleep for some time.
         std::this_thread::sleep_for(std::chrono::seconds(sensor->getTempoLeitura()));
     }
 };
 
-void envioMensagemPeriodica(Sensor sensors[], string machineId, mqtt::client *client){
+void envioMensagemPeriodica(string machineId, mqtt::client *client){
     while(envioAtivo){
         // Construct the JSON message.
         nlohmann::json j;
@@ -77,39 +81,59 @@ void envioMensagemPeriodica(Sensor sensors[], string machineId, mqtt::client *cl
         j["sensors"] = nlohmann::json::array(); // Inicializando um array para os sensores
         
         mtx.lock();
+        //imprime tudo de sensors
+        for(int i = 0; i < qtdeSensores ; i++){
+            cout<<"[envioMensagemPeriodica] sensor_id: "<<sensors[i]->getIdSensor()<<endl;
+            cout<<"[envioMensagemPeriodica] sensor_tipo: "<<sensors[i]->getTipoSensor()<<endl;
+            cout<<"[envioMensagemPeriodica] sensor_tempo: "<<sensors[i]->getTempoLeitura()<<endl;
+        }
+        mtx.unlock();
+        
             for(int i = 0; i < qtdeSensores ; i++){
-                string sensor_id = sensors[i].getIdSensor();
-                string sensor_tipo = sensors[i].getTipoSensor();
-                //time to string so tempo leitura
-                time_t sensor_tempo = sensors[i].getTempoLeitura();
-                tm *sensor_tempo_tm = localtime(&sensor_tempo);
-                char sensor_tempo_ss[80];
-                strftime(sensor_tempo_ss, 80, "%FT%TZ", sensor_tempo_tm);
+                mtx.lock();
+                //imprime id da thread
+                cout<<"[envioMensagemPeriodica] thread_id: "<<this_thread::get_id()<<endl;
 
-                cout<<"sensor_id: "<<sensor_id
-                    <<" sensor_tipo: "<<sensor_tipo
-                    <<" sensor_tempo: "<<sensor_tempo_ss
+                cout<<"[envioMensagemPeriodica] sensor_id: "<<sensors[i]->getIdSensor()<<endl;
+                cout<<"[envioMensagemPeriodica] sensor_tipo: "<<sensors[i]->getTipoSensor()<<endl;
+                cout<<"[envioMensagemPeriodica] sensor_tempo: "<<sensors[i]->getTempoLeitura()<<endl;
+
+                string sensor_id = sensors[i]->getIdSensor();
+                string sensor_tipo = sensors[i]->getTipoSensor();
+                //time to string so tempo leitura
+                time_t sensor_tempo = sensors[i]->getTempoLeitura();
+                tm *sensor_tempo_tm = localtime(&sensor_tempo);
+
+                std::stringstream sensor_tempo_ss;
+                sensor_tempo_ss << std::put_time(sensor_tempo_tm, "%FT%TZ");
+                std::string tempo_leitura_s = sensor_tempo_ss.str();
+
+                cout<<"[envioMensagemPeriodica] sensor_id: "<<sensor_id
+                    <<"  sensor_tipo: "<<sensor_tipo
+                    <<"  sensor_tempo: "<<tempo_leitura_s
                     <<endl;
 
-                if(sensors[i].getStatus() == true){
+                if(sensors[i]->getStatus() == true){
                     nlohmann::json sensor;
                     sensor["sensor_id"] = sensor_id;
                     sensor["data_type"] = sensor_tipo;
-                    sensor["data_interval"] = sensor_tempo;
+                    sensor["data_interval"] = tempo_leitura_s;
                     
                     // Adicionando o sensor ao array de sensores
                     j["sensors"].push_back(sensor);
+                    cout<<"[envioMensagemPeriodica] "<< j.dump()<<endl;
                 }
+                mtx.unlock();
             }
+        
+        mtx.lock();
+            // Publish the JSON message to the appropriate topic.
+            std::string topic = "/sensor_monitors";
+
+            mqtt::message msg(topic, j.dump(), QOS, false);
+            std::clog << "message published - topic: " << topic << " - message: " << j.dump() << std::endl;
+            client->publish(msg);
         mtx.unlock();
-
-        // Publish the JSON message to the appropriate topic.
-        std::string topic = "/sensor_monitors";
-
-        mqtt::message msg(topic, j.dump(), QOS, false);
-        std::clog << "message published - topic: " << topic << " - message: " << j.dump() << std::endl;
-        client->publish(msg);
-
         // Sleep for some time.
         std::this_thread::sleep_for(std::chrono::seconds(PERIODICIDADE_MSG_CONFIG));
     }
@@ -138,8 +162,6 @@ int main(int argc, char* argv[]) {
     gethostname(hostname, 1024);
     std::string machineId(hostname);
 
-    
-    Sensor *sensors[qtdeSensores];
     //Criar sensores
     sensors[0] = new Sensor("tempMaquina_01", TIPO_FLOAT, 5);
     sensors[1] = new Sensor("pcDisco_01", TIPO_INT, 2);
@@ -157,7 +179,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Create a thread for periodic messages.
-    thread t(envioMensagemPeriodica, *sensors, machineId, &client);
+    thread t(envioMensagemPeriodica, machineId, &client);
 
     for(int i=0; i < qtdeSensores; i++){
         threads[i].join();

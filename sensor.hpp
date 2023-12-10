@@ -30,8 +30,8 @@ class Sensor{
         string getIdSensor(){ return id_sensor; };
 
         string getTipoSensor(){
-            if(tipo_sensor = 1) return "int";
-            else if(tipo_sensor = 2) return "float";
+            if(tipo_sensor == 1) return "int";
+            else if(tipo_sensor == 2) return "float";
             else return "erro";
         }
 
