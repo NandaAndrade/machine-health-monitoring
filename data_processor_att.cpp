@@ -8,6 +8,10 @@
 
 #define QOS 1
 #define BROKER_ADDRESS "tcp://localhost:1883"
+const std::string TOPIC("test/topic");
+const std::string TOPIC2("test/topic");
+const std::string CLIENT_ID("Temperatura_AltoForno");
+const std::string CLIENT_ID2("Velocidade_Motor");
 #define GRAPHITE_HOST "graphite" //usando o BD do graphite
 #define GRAPHITE_PORT 2003 //porta do BD
 
@@ -26,8 +30,11 @@ std::vector<std::string> split(const std::string &str, char delim) {
 }
 
 int main(int argc, char* argv[]) {
-    std::string clientId = "clientId";
-    mqtt::async_client client(BROKER_ADDRESS, clientId);//criando um cliente assincrono
+    //std::string clientId = "clientId";
+    mqtt::async_client client1(BROKER_ADDRESS, CLIENT_ID);//criando um cliente assincrono
+    mqtt::async_client client2(BROKER_ADDRESS, CLIENT_ID2);//criando um cliente assincrono
+
+
 
     // Create an MQTT callback.
     class callback : public virtual mqtt::callback {
@@ -48,7 +55,8 @@ int main(int argc, char* argv[]) {
     };
 
     callback cb;
-    client.set_callback(cb);
+    client1.set_callback(cb);
+    client2.set_callback(cb);
 
     // Connect to the MQTT broker.
     mqtt::connect_options connOpts;
@@ -56,8 +64,14 @@ int main(int argc, char* argv[]) {
     connOpts.set_clean_session(true);
 
     try {
-        client.connect(connOpts);
-        client.subscribe("/sensors/#", QOS);//fazendo um subcribe 
+        mqtt::token_ptr conntok1 = client1.connect(connOpts);
+         mqtt::token_ptr conntok2 = client2.connect(connOpts);
+        // Esperando pela conexão
+        conntok1->wait();
+        conntok2->wait();
+        //client.connect(connOpts);
+        client1.subscribe("/sensors/", QOS);//fazendo um subscribe 
+        client2.subscribe("/sensors/", QOS);//fazendo um subscribe 
     } catch (mqtt::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
         return EXIT_FAILURE;
@@ -66,6 +80,10 @@ int main(int argc, char* argv[]) {
     while (true) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
+
+    client1.disconnect()->wait();
+    client2.disconnect()->wait();
+
 
     return EXIT_SUCCESS;
 }
