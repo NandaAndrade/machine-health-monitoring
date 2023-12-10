@@ -12,6 +12,7 @@
 
 #define QOS 1
 #define BROKER_ADDRESS "tcp://localhost:1883"
+#define PERIODICIDADE_MSG_CONFIG 10
 
 bool envioAtivo = true;
 
@@ -26,20 +27,27 @@ string currenteTimeISO(){
     return timestamp;
 }
 
-void envioLeiturasTemperaturaBroker(Sensor *sensor, string machineId, mqtt::client *client){
+
+void envioLeiturasBroker(Sensor *sensor, string machineId, mqtt::client *client){
     while(envioAtivo){
         // Get the current time in ISO 8601 format.
         string timestamp = currenteTimeISO();
 
-        
-        // Generate a random value.
-        float temperatura = 0;
-       sensor->FazerLeitura(temperatura);
-
         // Construct the JSON message.
         nlohmann::json j;
         j["timestamp"] = timestamp;
-        j["value"] = temperatura;
+
+        // Generate a random value.
+        sensor->FazerLeitura();
+        if(sensor->getTipoSensor() == "int"){
+            j["value"] = sensor->getLeituraInt();
+        }else if(sensor->getTipoSensor() == "float"){
+            j["value"] = sensor->getLeituraFloat();
+        }else{
+            std::clog << "tipo do sensor incompatível parando o envio e inativando o sensor"<< std::endl;
+            sensor->setStatus(false);
+            return;
+        }
 
         // Publish the JSON message to the appropriate topic.
         std::string topic = "/sensors/" + machineId + "/" + sensor->getIdSensor();
@@ -52,31 +60,37 @@ void envioLeiturasTemperaturaBroker(Sensor *sensor, string machineId, mqtt::clie
     }
 };
 
-void envioLeiturasPorcentagemBroker(Sensor *sensor, string machineId, mqtt::client *client){
+void envioMensagemPeriodica(Sensor **sensors, string machineId, mqtt::client *client){
     while(envioAtivo){
-        // Get the current time in ISO 8601 format.
-        string timestamp = currenteTimeISO();
-
-        
-        // Generate a random value.
-        float porcentagem = 0;
-       sensor->FazerLeitura(porcentagem);
-
         // Construct the JSON message.
         nlohmann::json j;
-        j["timestamp"] = timestamp;
-        j["value"] = porcentagem;
+        j["machine_id"] = machineId;
+        j["sensors"] = nlohmann::json::array(); // Inicializando um array para os sensores
+        
+        for(int i = 0; i < sizeof(sensors); i++){
+            if(sensors[i]->getStatus()){
+                nlohmann::json sensor;
+                sensor["sensor_id"] = sensors[i]->getIdSensor();
+                sensor["data_type"] = sensors[i]->getTipoSensor();
+                sensor["data_interval"] = sensors[i]->getTempoLeitura();
+                
+                // Adicionando o sensor ao array de sensores
+                j["sensors"].push_back(sensor);
+            }
+        }
 
         // Publish the JSON message to the appropriate topic.
-        std::string topic = "/sensors/" + machineId + "/" + sensor->getIdSensor();
+        std::string topic = "/sensor_monitors";
+
         mqtt::message msg(topic, j.dump(), QOS, false);
         std::clog << "message published - topic: " << topic << " - message: " << j.dump() << std::endl;
         client->publish(msg);
 
         // Sleep for some time.
-        std::this_thread::sleep_for(std::chrono::seconds(sensor->getTempoLeitura()));
+        std::this_thread::sleep_for(std::chrono::seconds(PERIODICIDADE_MSG_CONFIG));
     }
 };
+
 
 int main(int argc, char* argv[]) {
     std::string clientId = "sensor-monitor";
@@ -100,33 +114,27 @@ int main(int argc, char* argv[]) {
     gethostname(hostname, 1024);
     std::string machineId(hostname);
 
+    int qtdeSensores = 6;
+    Sensor *sensors[qtdeSensores];
     //Criar sensores
-    Sensor *tempMaquina_01 = new Sensor("tempMaquina_01", TIPO_FLOAT, 5);
-    Sensor *pcDisco_01 = new Sensor("pcDisco_01", TIPO_PORCENTAGEM, 2);
-    Sensor *pcMemoria_01 = new Sensor("pcMemoria_01", TIPO_PORCENTAGEM, 3);
+    sensors[0] = new Sensor("tempMaquina_01", TIPO_FLOAT, 5);
+    sensors[1] = new Sensor("pcDisco_01", TIPO_INT, 2);
+    sensors[2] = new Sensor("pcMemoria_01", TIPO_INT, 3);
 
-    Sensor *tempMaquina_02 = new Sensor("tempMaquina_02", TIPO_FLOAT, 5);
-    Sensor *pcDisco_02 = new Sensor("pcDisco_02", TIPO_PORCENTAGEM, 2);
-    Sensor *pcMemoria_02 = new Sensor("pcMemoria_02", TIPO_PORCENTAGEM, 3);
+    sensors[3] = new Sensor("tempMaquina_02", TIPO_FLOAT, 5);
+    sensors[4] = new Sensor("pcDisco_02", TIPO_INT, 2);
+    sensors[5] = new Sensor("pcMemoria_02", TIPO_INT, 3);
 
+    vector<thread> threads;
 
     // Create a thread for each sensor.
-    std::thread tmp01(envioLeiturasTemperaturaBroker, tempMaquina_01, machineId, &client);
-    std::thread dsc01(envioLeiturasPorcentagemBroker, pcDisco_01, machineId, &client);
-    std::thread mem01(envioLeiturasPorcentagemBroker, pcMemoria_01, machineId, &client);
+    for(int i=0; i < qtdeSensores; i++){
+        threads.emplace_back(envioLeiturasBroker, sensors[i], machineId, &client);
+    }
 
-    std::thread tmp02(envioLeiturasTemperaturaBroker, tempMaquina_02, machineId, &client);
-    std::thread dsc02(envioLeiturasPorcentagemBroker, pcDisco_02, machineId, &client);
-    std::thread mem02(envioLeiturasPorcentagemBroker, pcMemoria_02, machineId, &client);
-
-    // Wait for the threads to finish.
-    tmp01.join();
-    dsc01.join();
-    mem01.join();
-
-    tmp02.join();
-    dsc02.join();
-    mem02.join();
+    for(int i=0; i < qtdeSensores; i++){
+        threads[i].join();
+    }
 
     // Disconnect from the MQTT broker.
     try {
