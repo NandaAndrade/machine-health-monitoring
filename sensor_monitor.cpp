@@ -7,6 +7,7 @@
 #include "json.hpp" // json handling
 #include "mqtt/client.h" // paho mqtt
 #include <iomanip>
+#include <mutex>
 
 #include "sensor.hpp"
 
@@ -15,6 +16,12 @@
 #define PERIODICIDADE_MSG_CONFIG 10
 
 bool envioAtivo = true;
+int qtdeSensores = 6;
+
+mutex mtx;
+
+using namespace std;
+
 
 string currenteTimeISO(){
     // Get the current time in ISO 8601 format.
@@ -38,16 +45,18 @@ void envioLeiturasBroker(Sensor *sensor, string machineId, mqtt::client *client)
         j["timestamp"] = timestamp;
 
         // Generate a random value.
-        sensor->FazerLeitura();
-        if(sensor->getTipoSensor() == "int"){
-            j["value"] = sensor->getLeituraInt();
-        }else if(sensor->getTipoSensor() == "float"){
-            j["value"] = sensor->getLeituraFloat();
-        }else{
-            std::clog << "tipo do sensor incompatível parando o envio e inativando o sensor"<< std::endl;
-            sensor->setStatus(false);
-            return;
-        }
+        mtx.lock();
+            sensor->FazerLeitura();
+            if(sensor->getTipoSensor() == "int"){
+                j["value"] = sensor->getLeituraInt();
+            }else if(sensor->getTipoSensor() == "float"){
+                j["value"] = sensor->getLeituraFloat();
+            }else{
+                std::clog << "tipo do sensor incompatível parando o envio e inativando o sensor"<< std::endl;
+                sensor->setStatus(false);
+                return;
+            }
+        mtx.unlock();
 
         // Publish the JSON message to the appropriate topic.
         std::string topic = "/sensors/" + machineId + "/" + sensor->getIdSensor();
@@ -60,24 +69,39 @@ void envioLeiturasBroker(Sensor *sensor, string machineId, mqtt::client *client)
     }
 };
 
-void envioMensagemPeriodica(Sensor **sensors, string machineId, mqtt::client *client){
+void envioMensagemPeriodica(Sensor sensors[], string machineId, mqtt::client *client){
     while(envioAtivo){
         // Construct the JSON message.
         nlohmann::json j;
         j["machine_id"] = machineId;
         j["sensors"] = nlohmann::json::array(); // Inicializando um array para os sensores
         
-        for(int i = 0; i < sizeof(sensors); i++){
-            if(sensors[i]->getStatus()){
-                nlohmann::json sensor;
-                sensor["sensor_id"] = sensors[i]->getIdSensor();
-                sensor["data_type"] = sensors[i]->getTipoSensor();
-                sensor["data_interval"] = sensors[i]->getTempoLeitura();
-                
-                // Adicionando o sensor ao array de sensores
-                j["sensors"].push_back(sensor);
+        mtx.lock();
+            for(int i = 0; i < qtdeSensores ; i++){
+                string sensor_id = sensors[i].getIdSensor();
+                string sensor_tipo = sensors[i].getTipoSensor();
+                //time to string so tempo leitura
+                time_t sensor_tempo = sensors[i].getTempoLeitura();
+                tm *sensor_tempo_tm = localtime(&sensor_tempo);
+                char sensor_tempo_ss[80];
+                strftime(sensor_tempo_ss, 80, "%FT%TZ", sensor_tempo_tm);
+
+                cout<<"sensor_id: "<<sensor_id
+                    <<" sensor_tipo: "<<sensor_tipo
+                    <<" sensor_tempo: "<<sensor_tempo_ss
+                    <<endl;
+
+                if(sensors[i].getStatus() == true){
+                    nlohmann::json sensor;
+                    sensor["sensor_id"] = sensor_id;
+                    sensor["data_type"] = sensor_tipo;
+                    sensor["data_interval"] = sensor_tempo;
+                    
+                    // Adicionando o sensor ao array de sensores
+                    j["sensors"].push_back(sensor);
+                }
             }
-        }
+        mtx.unlock();
 
         // Publish the JSON message to the appropriate topic.
         std::string topic = "/sensor_monitors";
@@ -114,7 +138,7 @@ int main(int argc, char* argv[]) {
     gethostname(hostname, 1024);
     std::string machineId(hostname);
 
-    int qtdeSensores = 6;
+    
     Sensor *sensors[qtdeSensores];
     //Criar sensores
     sensors[0] = new Sensor("tempMaquina_01", TIPO_FLOAT, 5);
@@ -132,9 +156,14 @@ int main(int argc, char* argv[]) {
         threads.emplace_back(envioLeiturasBroker, sensors[i], machineId, &client);
     }
 
+    // Create a thread for periodic messages.
+    thread t(envioMensagemPeriodica, *sensors, machineId, &client);
+
     for(int i=0; i < qtdeSensores; i++){
         threads[i].join();
     }
+
+    t.join();
 
     // Disconnect from the MQTT broker.
     try {
